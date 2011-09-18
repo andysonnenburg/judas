@@ -1,10 +1,4 @@
-{-# LANGUAGE
-    DoRec
-  , FlexibleContexts
-  , FlexibleInstances
-  , GeneralizedNewtypeDeriving
-  , MultiParamTypeClasses
-  , StandaloneDeriving #-}
+{-# LANGUAGE DoRec #-}
 module Data.ClassFile.ConstantPool
        ( ConstantPool
        , ConstantPoolEntry (..)
@@ -18,13 +12,16 @@ module Data.ClassFile.ConstantPool
        ) where
 
 import Control.Monad.Reader
+import Control.Monad.State
 
-import Data.Array
+import Data.Array hiding (index)
 import Data.Binary.Get
+import Data.Binary.IEEE754
 import Data.ByteString.UTF8 (toString)
 import Data.Int
 
-import Prelude hiding (Integer, length)
+import Prelude hiding (Integer, error, length)
+import qualified Prelude
 
 type ConstantPool = [ConstantPoolEntry]
 
@@ -61,16 +58,18 @@ getConstantPool = do
   where
     getConstantPoolCount = getWord16be
     
-    getCpInfos n = f 1
+    getCpInfos n = evalStateT m 1
       where
-        f i = do
-          (j, x) <- getCpInfo
-          let i' = i + j
-          ys <- if i' <= n then f i' else return []
-          return (y:ys)
+        m = do
+          i <- get
+          if i > n
+            then return []
+            else do x <- getCpInfo
+                    xs <- m
+                    return (x:xs)
     
     getCpInfo = do
-      tag <- lift getWord8
+      tag <- lift' getWord8
       case tag of
         7 -> getClass
         9 -> getFieldref
@@ -86,9 +85,9 @@ getConstantPool = do
         _ -> fail ("unexpected tag: " ++ show tag)
     
     getClass = do
-      nameIndex <- lift getWord16be
+      nameIndex <- lift' getWord16be
       name <- lookupUtf8 nameIndex
-      return (1, Class name)
+      return' (Class name)
     
     lookupClass classIndex =
       asks (unClass . (!classIndex))
@@ -96,7 +95,7 @@ getConstantPool = do
         unClass entry =
           case entry of
             Class name -> name
-            _ -> error ("expected Class entry, got: " ++ show entry)
+            _ -> error "Class" entry classIndex
     
     getFieldref = getRef Fieldref
     
@@ -105,35 +104,39 @@ getConstantPool = do
     getInterfaceMethodref = getRef InterfaceMethodref
     
     getRef mkRef = do
-      classIndex <- lift getWord16be
+      classIndex <- lift' getWord16be
       class' <- lookupClass classIndex
-      nameAndTypeIndex <- lift getWord16be
+      nameAndTypeIndex <- lift' getWord16be
       nameAndType <- lookupNameAndType nameAndTypeIndex
-      return (1, mkRef class' nameAndType)
+      return' (mkRef class' nameAndType)
     
     getString = do
-      stringIndex <- lift getWord16be
+      stringIndex <- lift' getWord16be
       string <- lookupUtf8 stringIndex
-      return (1, String string)
+      return' (String string)
     
     getInteger = do
-      x <- lift getWord32be
-      return (1, Integer . fromIntegral $ x)
+      x <- lift' getWord32be
+      return' . Integer . fromIntegral $ x
     
-    getFloat = undefined
+    getFloat = do
+      x <- lift' getFloat32be
+      return' (Float x)
     
     getLong = do
-      x <- lift getWord64be
-      return (2, Long . fromIntegral $ x)
+      x <- lift' getWord64be
+      return'' . Long . fromIntegral $ x
     
-    getDouble = undefined
+    getDouble = do
+      x <- lift' getFloat64be
+      return'' (Double x)
     
     getNameAndType = do
-      nameIndex <- lift getWord16be
+      nameIndex <- lift' getWord16be
       name <- lookupUtf8 nameIndex
-      descriptorIndex <- lift getWord16be
+      descriptorIndex <- lift' getWord16be
       descriptor <- lookupUtf8 descriptorIndex
-      return (1, NameAndType (name, descriptor))
+      return' (NameAndType (name, descriptor))
     
     lookupNameAndType nameAndTypeIndex =
       asks (unNameAndType . (!nameAndTypeIndex))
@@ -141,12 +144,12 @@ getConstantPool = do
         unNameAndType entry =
           case entry of
             NameAndType nameAndType -> nameAndType
-            _ -> error ("expected NameAndType, got: " ++ show entry)
+            _ -> error "NameAndType" entry nameAndTypeIndex
     
     getUtf8 = do
-      length <- lift getWord16be
-      bytes <- lift . getByteString . fromIntegral $ length
-      return (1, Utf8 (toString bytes))
+      length <- lift' getWord16be
+      bytes <- lift' . getByteString . fromIntegral $ length
+      return' (Utf8 (toString bytes))
     
     lookupUtf8 utf8Index =
       asks (unUtf8 . (!utf8Index))
@@ -154,4 +157,22 @@ getConstantPool = do
         unUtf8 entry =
           case entry of
             Utf8 bytes -> bytes
-            _ -> error ("expected Utf8, got: " ++ show entry)
+            _ -> error "Utf8" entry utf8Index
+    
+    error expected actual index = Prelude.error message
+      where
+        message = showString "expected " . shows expected .
+                  showString ", got " . shows actual .
+                  showString " at " . shows index $ ""
+    
+    return' x = do
+      i <- get
+      put (i + 1)
+      return (i, x)
+    
+    return'' x = do
+      i <- get
+      put (i + 2)
+      return (i, x)
+    
+    lift' = lift . lift
