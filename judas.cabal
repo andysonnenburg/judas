@@ -1,0 +1,14 @@
+name: judas
+version: 0.1
+cabal-version: >= 1.2
+build-type: Simple
+executable judas
+  main-is: Main.hs
+  build-depends: base == 4.*
+               , array
+               , bytestring
+               , cmdargs
+               , mtl
+               , utf8-string
+               , binary
+               , data-binary-ieee754
