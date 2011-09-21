@@ -1,23 +1,25 @@
-{-# LANGUAGE DeriveDataTypeable, RecordWildCards #-}
+{-# LANGUAGE DeriveDataTypeable, RecordWildCards, ScopedTypeVariables #-}
 {-# OPTIONS_GHC -fno-cse #-}
 module Main (main) where
 
+import qualified Codec.Archive.Zip.Lazy as Zip
+
+import Control.Applicative
 import Control.Exception
 import Control.Monad
-import Control.Monad.Error ()
 
 import Data.Binary.Get
+import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as ByteString
 import Data.ClassFile.ConstantPool
-
-import Foreign.LibZip
+import Data.Function
 
 import System.Console.CmdArgs
 import System.Directory
 import System.FilePath
-import System.IO.Error
+import System.IO.Error hiding (catch)
 
-import Prelude hiding (readFile)
+import Prelude hiding (catch, readFile, zip)
 
 data Judas = Judas
              { classPath :: String
@@ -30,17 +32,17 @@ judas = Judas { classPath = "." &=
                             typ "CLASSPATH" &=
                             name "classpath"
               , files = def &=
-                        typ "INTERNAL_NAME" &=
+                        typ "INTERNAL_NAMES" &=
                         args
               }
 
 main :: IO ()
 main = do
   Judas {..} <- cmdArgs judas
-  -- let classPaths = splitSearchPath classPath
-  bracket (openZip "rt.jar") zClose $ \zip ->
-    readFile zip "java/util/ArrayList.class" >>=
-    print . runGet m . ByteString.fromChunks . (:[])
+  let paths = splitSearchPath classPath
+  classPath' <- newClassPath paths
+  forM_ files $
+    readFile classPath' >=> print . runGet m
   where
     m = do
       getMagic_
@@ -53,26 +55,6 @@ main = do
         f (Class a) b = a:b
         f _ b = b
     
-    mkReadFile classPaths file =
-      msum (map f classPaths)
-      where
-        f path = do
-          dirExists <- doesDirectoryExist path
-          if dirExists
-            then readFileFromDir path file
-            else do fileExists <- doesFileExist path
-                    if fileExists
-                      then readFileFromJar path file
-                      else doesNotExist file
-    
-    doesNotExist file =
-      ioError (mkIOError doesNotExistErrorType "" Nothing (Just file))
-    
-    readFileFromDir dir file =
-      ByteString.readFile (dir </> file)
-    
-    readFileFromJar jar file = undefined
-    
     getMagic_ = do
       [0xCA, 0xFE, 0xBA, 0xBE] <- replicateM 4 getWord8
       return ()
@@ -84,3 +66,52 @@ main = do
     getMajorVersion_ = do
       _ <- getWord16be
       return ()
+
+data ClassFile = ClassFile
+                 { internalName :: String
+                 , bytes :: ByteString
+                 }
+
+instance Eq ClassFile where
+  (==) = (==) `on` internalName
+
+instance Ord ClassFile where
+  compare = compare `on` internalName
+
+newtype ClassPath = ClassPath ([FilePath -> IO ByteString])
+
+newClassPath :: [FilePath] -> IO ClassPath
+newClassPath paths = do
+  xs <- forM paths $ \path -> do
+    directoryExists <- doesDirectoryExist path
+    if directoryExists
+      then return (readInternalNameFromDirectory path)
+      else do fileExists <- doesFileExist path
+              if fileExists
+                then readInternalNameFromZip <$> Zip.openZip path
+                else doesNotExistError path
+  return (ClassPath xs)
+  where
+    readInternalNameFromDirectory directory internalName =
+      ByteString.readFile (directory </> file)
+      where
+        file = fromInternalName internalName
+    
+    readInternalNameFromZip zip internalName =
+      Zip.readFile zip file
+      where
+        file = fromInternalName internalName
+    
+    fromInternalName = (`addExtension` ".class")
+
+readFile :: ClassPath -> FilePath -> IO ByteString
+readFile (ClassPath xs) filePath =
+  msum' . map ($ filePath) $ xs
+  where
+    msum' = foldr mplus' mzero'
+    mzero' = doesNotExistError filePath
+    m `mplus'` n = m `catch` \(_ :: SomeException) -> n
+
+doesNotExistError :: FilePath -> IO a
+doesNotExistError filePath =
+  ioError (mkIOError doesNotExistErrorType "" Nothing (Just filePath))
