@@ -9,6 +9,7 @@ executable judas
   build-depends: base == 4.*
                , array
                , bytestring
+               , containers
                , cmdargs
                , directory
                , filepath
