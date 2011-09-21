@@ -1,22 +1,27 @@
-{-# LANGUAGE EmptyDataDecls, ForeignFunctionInterface #-}
+{-# LANGUAGE EmptyDataDecls, ForeignFunctionInterface, RecordWildCards #-}
 module Foreign.LibZip.Internal
        ( Zip
        , ZipFile
        , ZipStat (..)
-       , zip_open
-       , zip_name_locate
-       , zip_fopen
-       , zip_fopen_index
-       , zip_fread
-       , zip_fclose
-       , zip_close
-       , zip_stat
-       , zip_stat_index
+       , open
+       , nameLocate
+       , fopen
+       , fopenIndex
+       , fread
+       , fclose
+       , close
+       , closeFunPtr
+       , stat
+       , statIndex
+       , strerror
+       , fileStrerror
        ) where
 
 #include <zip.h>
 
 #let alignment t = "%lu", (unsigned long) offsetof(struct { char x__; t (y__); }, y__)
+
+import Control.Applicative
 
 import Foreign
 import Foreign.C.Types
@@ -36,8 +41,8 @@ data ZipStat = ZipStat
                }
 
 instance Storable ZipStat where
-  sizeOf _ = #size zip_stat
-  alignment _ = #aligment zip_stat
+  sizeOf _ = #{size struct zip_stat}
+  alignment _ = #{alignment struct zip_stat}
   peek ptr =
     ZipStat <$>
     #{peek struct zip_stat, name} ptr <*>
@@ -58,29 +63,38 @@ instance Storable ZipStat where
     #{poke struct zip_stat, comp_method} ptr comp_method
     #{poke struct zip_stat, encryption_method} ptr encryption_method
 
-foreign import ccall "zip_open"
-  zip_open :: CString -> CInt -> Ptr CInt -> IO (Ptr Zip)
+foreign import ccall unsafe "zip_open"
+  open :: CString -> CInt -> Ptr CInt -> IO (Ptr Zip)
 
-foreign import ccall "zip_name_locate"
-  zip_name_locate :: Ptr Zip -> CString -> CInt -> IO CInt
+foreign import ccall unsafe "zip_name_locate"
+  nameLocate :: Ptr Zip -> CString -> CInt -> IO CInt
 
-foreign import ccall "zip_fopen"
-  zip_fopen :: Ptr Zip -> CString -> CInt -> IO (Ptr ZipFile)
+foreign import ccall unsafe "zip_fopen"
+  fopen :: Ptr Zip -> CString -> CInt -> IO (Ptr ZipFile)
 
-foreign import ccall "zip_fopen_index"
-  zip_fopen_index :: Ptr Zip -> CString -> CInt -> IO (Ptr ZipFile)
+foreign import ccall unsafe "zip_fopen_index"
+  fopenIndex :: Ptr Zip -> CInt -> CInt -> IO (Ptr ZipFile)
 
-foreign import ccall "zip_fread"
-  zip_fread :: Ptr ZipFile -> Ptr Word8 -> CInt -> IO CInt
+foreign import ccall unsafe "zip_fread"
+  fread :: Ptr ZipFile -> Ptr Word8 -> CInt -> IO CInt
 
-foreign import ccall "zip_fclose"
-  zip_fclose :: Ptr ZipFile -> IO CInt
+foreign import ccall unsafe "zip_fclose"
+  fclose :: Ptr ZipFile -> IO CInt
 
-foreign import ccall "zip_close"
-  zip_close :: Ptr Zip -> IO CInt
+foreign import ccall unsafe "zip_close"
+  close :: Ptr Zip -> IO CInt
 
-foreign import ccall "zip_stat"
-  zip_stat :: Ptr Zip -> CString -> CInt -> Ptr ZipStat -> IO CInt
+foreign import ccall unsafe "&zip_close"
+  closeFunPtr :: FunPtr (Ptr Zip -> IO ())
 
-foreign import ccall "zip_stat_index"
-  zip_stat_index :: Ptr Zip -> CInt -> CInt -> Ptr ZipStat -> IO CInt
+foreign import ccall unsafe "zip_stat"
+  stat :: Ptr Zip -> CString -> CInt -> Ptr ZipStat -> IO CInt
+
+foreign import ccall unsafe "zip_stat_index"
+  statIndex :: Ptr Zip -> CInt -> CInt -> Ptr ZipStat -> IO CInt
+
+foreign import ccall unsafe "zip_strerror"
+  strerror :: Ptr Zip -> IO CString
+
+foreign import ccall unsafe "zip_file_strerror"
+  fileStrerror :: Ptr ZipFile -> IO CString

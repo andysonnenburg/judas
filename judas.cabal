@@ -4,11 +4,17 @@ cabal-version: >= 1.2
 build-type: Simple
 executable judas
   main-is: Main.hs
+  other-modules: Foreign.LibZip
+                 Foreign.LibZip.Internal
   build-depends: base == 4.*
                , array
                , bytestring
                , cmdargs
+               , directory
+               , filepath
                , mtl
                , utf8-string
                , binary
                , data-binary-ieee754
+  extra-libraries: zip
+  ghc-options: -Wall
